@@ -11,8 +11,12 @@ from sqlalchemy.orm import Session
 from database import SessionLocal, init_db, Task
 from config import API_KEY
 
-# Download necessary NLTK data
-nltk.download("vader_lexicon")
+# Check if VADER lexicon is installed before downloading
+try:
+    nltk.data.find('sentiment/vader_lexicon.zip')
+except LookupError:
+    nltk.download('vader_lexicon')
+
 sia = SentimentIntensityAnalyzer()
 
 # Initialize Summarization Model
