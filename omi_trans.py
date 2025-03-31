@@ -11,11 +11,7 @@ from sqlalchemy.orm import Session
 from database import SessionLocal, init_db, Task
 from config import API_KEY
 
-# Check if VADER lexicon is installed before downloading
-try:
-    nltk.data.find('sentiment/vader_lexicon.zip')
-except LookupError:
-    nltk.download('vader_lexicon')
+# Download necessary NLTK data
 
 sia = SentimentIntensityAnalyzer()
 
