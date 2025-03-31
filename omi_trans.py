@@ -3,17 +3,11 @@ from fastapi.middleware.cors import CORSMiddleware
 import json
 import ssl
 import http.client as http_client
-import nltk
-from nltk.sentiment import SentimentIntensityAnalyzer
 from transformers import pipeline  
 from deep_translator import GoogleTranslator
 from sqlalchemy.orm import Session
 from database import SessionLocal, init_db, Task
 from config import API_KEY
-
-# Download necessary NLTK data
-nltk.download("vader_lexicon")
-sia = SentimentIntensityAnalyzer()
 
 # Initialize Summarization Model
 summarizer = pipeline("summarization", model="facebook/bart-large-cnn")
@@ -89,15 +83,15 @@ async def live_transcription(request: Request):
             return {"message": "No valid transcription received"}
         
         translated_text = translate_to_english(transcript)
-        sentiment_score = sia.polarity_scores(translated_text)["compound"]
-        mood, suggestion = analyze_sentiment(sentiment_score)
+        # Removed Sentiment Analysis: Default to neutral sentiment
+        mood, suggestion = "Neutral 😐", "Stay focused and keep moving!"
 
         ai_response = ask_groq(translated_text)
         notification_message = summarize_text(ai_response, max_length=200)
 
         return {
             "message": notification_message,  
-            "sentiment": mood,
+            "sentiment": mood,  # Now returns neutral by default
             "response": ai_response
         }
     except Exception as e:
@@ -113,22 +107,13 @@ async def receive_transcription(request: Request):
             return {"message": "No transcription received"}
 
         translated_text = translate_to_english(transcript)
-        sentiment_score = sia.polarity_scores(translated_text)["compound"]
-        mood, suggestion = analyze_sentiment(sentiment_score)
+        # Removed Sentiment Analysis: Default to neutral sentiment
+        mood, suggestion = "Neutral 😐", "Stay focused and keep moving!"
         ai_response = ask_groq(translated_text)
 
         return {"message": "Webhook received", "sentiment": mood, "response": ai_response}
     except Exception as e:
         return {"message": "Internal Server Error"}
-
-def analyze_sentiment(score):
-    """Analyzes sentiment and provides a brief suggestion."""
-    if score > 0.2:
-        return "Happy 😊", "Keep up the great energy!"
-    elif score < -0.2:
-        return "Sad 😞", "Stay positive! You got this!"
-    else:
-        return "Neutral 😐", "Stay focused and keep moving!"
 
 # Task Management Routes
 @app.get("/tasks")
