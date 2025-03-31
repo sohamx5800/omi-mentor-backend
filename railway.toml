@@ -1,0 +1,9 @@
+[build]
+builder = "nixpacks"
+buildCommand = "python -m venv --copies /opt/venv && . /opt/venv/bin/activate && pip install -r requirements.txt"
+
+[build.nixpacks]
+pkgs = ["python38", "gcc"]
+
+[deploy]
+startCommand = "uvicorn omi_trans:app --host 0.0.0.0 --port $PORT"
