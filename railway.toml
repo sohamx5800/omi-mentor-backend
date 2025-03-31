@@ -1,7 +1,7 @@
 [build]
 builder = "nixpacks"
 # Define the full build process here, including dependency installation
-buildCommand = "python -m venv --copies /opt/venv && . /opt/venv/bin/activate && pip install -r requirements.txt"
+buildCommand = "pip install -r requirements.txt"
 
 [build.nixpacks]
 pkgs = ["python38", "gcc"]  # Python 3.8 and gcc for building dependencies
