@@ -11,30 +11,20 @@ from sqlalchemy.orm import Session
 from database import SessionLocal, init_db, Task
 from config import API_KEY
 import os
-import logging
+# Define the path to vader_lexicon.txt in the main project directory
+vader_lexicon_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), "vader_lexicon.txt")
 
-# Set up logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-# Define path for NLTK data in your project directory
+# Set the NLTK_DATA environment variable if needed (optional)
 nltk_data_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), "nltk_data")
-
-# Ensure the nltk_data directory exists
-os.makedirs(nltk_data_path, exist_ok=True)
-
-# Set the NLTK_DATA environment variable to your project directory
 os.environ['NLTK_DATA'] = nltk_data_path
 
-# Download necessary NLTK data if not already downloaded
-def ensure_vader_lexicon():
-    try:
-        nltk.data.find("vader_lexicon")
-    except LookupError:
-        logger.info("vader_lexicon not found. Downloading...")
-        nltk.download("vader_lexicon", download_dir=nltk_data_path)
-
-ensure_vader_lexicon()
+# Check if vader_lexicon exists locally in the project directory
+try:
+    nltk.data.find("vader_lexicon")
+except LookupError:
+    print(f"vader_lexicon not found locally! Using {vader_lexicon_path} instead.")
+    # Set the vader_lexicon.txt file location manually for SentimentIntensityAnalyzer
+    nltk.data.path.append(vader_lexicon_path)
 
 # Initialize SentimentIntensityAnalyzer
 sia = SentimentIntensityAnalyzer()
