@@ -1,17 +1,10 @@
 [build]
 builder = "nixpacks"
-buildCommand = "pip install --no-cache-dir -r requirements.txt"
+# Define the full build process here, including dependency installation
+buildCommand = "python -m venv --copies /opt/venv && . /opt/venv/bin/activate && pip install -r requirements.txt"
 
-nixpacksPlan = """
-  [phases.setup]
-  nixPkgs = ['python39', 'gcc'] # Use Python 3.9 if needed
+[build.nixpacks]
+pkgs = ["python38", "gcc"]  # Python 3.8 and gcc for building dependencies
 
-  [phases.build]
-  cmds = ['pip install --no-cache-dir -r requirements.txt']
-
-  [phases.install]
-  cmds = ['echo "Dependencies installed successfully"']
-
-  [start]
-  cmd = "uvicorn omi_trans:app --host 0.0.0.0 --port ${PORT:-8000}"
-"""
+[deploy]
+startCommand = "uvicorn omi_trans:app --host 0.0.0.0 --port $PORT"
