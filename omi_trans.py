@@ -10,23 +10,9 @@ from deep_translator import GoogleTranslator
 from sqlalchemy.orm import Session
 from database import SessionLocal, init_db, Task
 from config import API_KEY
-import os
-# Define the path to vader_lexicon.txt in the main project directory
-vader_lexicon_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), "vader_lexicon.txt")
 
-# Set the NLTK_DATA environment variable if needed (optional)
-nltk_data_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), "nltk_data")
-os.environ['NLTK_DATA'] = nltk_data_path
-
-# Check if vader_lexicon exists locally in the project directory
-try:
-    nltk.data.find("vader_lexicon")
-except LookupError:
-    print(f"vader_lexicon not found locally! Using {vader_lexicon_path} instead.")
-    # Set the vader_lexicon.txt file location manually for SentimentIntensityAnalyzer
-    nltk.data.path.append(vader_lexicon_path)
-
-# Initialize SentimentIntensityAnalyzer
+# Download necessary NLTK data
+nltk.download("vader_lexicon")
 sia = SentimentIntensityAnalyzer()
 
 # Initialize Summarization Model
@@ -63,20 +49,16 @@ def ask_groq(question):
         "Content-Type": "application/json",
         "Authorization": f"Bearer {API_KEY}"
     }
-    try:
-        conn.request("POST", ENDPOINT, body=json.dumps(payload), headers=headers)
-        res = conn.getresponse()
-        data = res.read()
-        
-        if res.status == 200:
-            full_response = json.loads(data.decode("utf-8"))["choices"][0]["message"]["content"]
-            concise_response = summarize_text(full_response, max_length=200)  
-            return concise_response
-        else:
-            return f"❌ Error {res.status}: {data.decode('utf-8')}"
-    except Exception as e:
-        logger.error(f"Error in ask_groq: {str(e)}")
-        return f"❌ Error while fetching from Groq API: {str(e)}"
+    conn.request("POST", ENDPOINT, body=json.dumps(payload), headers=headers)
+    res = conn.getresponse()
+    data = res.read()
+    
+    if res.status == 200:
+        full_response = json.loads(data.decode("utf-8"))["choices"][0]["message"]["content"]
+        concise_response = summarize_text(full_response, max_length=200)  
+        return concise_response
+    else:
+        return f"❌ Error {res.status}: {data.decode('utf-8')}"
 
 def summarize_text(text, max_length=100):
     """Summarizes response into 2-3 lines, keeping the core topic/suggestion."""
@@ -90,8 +72,7 @@ def translate_to_english(text):
     try:
         translated_text = GoogleTranslator(source='auto', target='en').translate(text)
         return translated_text
-    except Exception as e:
-        logger.error(f"Error during translation: {str(e)}")
+    except Exception:
         return text  # Return original text if translation fails
 
 @app.post("/livetranscript")
@@ -120,7 +101,6 @@ async def live_transcription(request: Request):
             "response": ai_response
         }
     except Exception as e:
-        logger.error(f"Error in live_transcription: {str(e)}")
         return {"message": "Internal Server Error"}
 
 @app.post("/webhook")
@@ -139,7 +119,6 @@ async def receive_transcription(request: Request):
 
         return {"message": "Webhook received", "sentiment": mood, "response": ai_response}
     except Exception as e:
-        logger.error(f"Error in receive_transcription: {str(e)}")
         return {"message": "Internal Server Error"}
 
 def analyze_sentiment(score):
