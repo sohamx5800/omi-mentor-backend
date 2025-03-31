@@ -9,8 +9,8 @@ from sqlalchemy.orm import Session
 from database import SessionLocal, init_db, Task
 from config import API_KEY
 
-# Initialize Summarization Model
-summarizer = pipeline("summarization", model="facebook/bart-large-cnn")
+# Initialize Summarization Model (Use a smaller model to save memory)
+summarizer = pipeline("summarization", model="t5-small")
 
 # Initialize Database
 init_db()
