@@ -1,0 +1,6 @@
+fastapi==0.68.2
+uvicorn==0.15.0
+python-dotenv==0.19.2
+nltk==3.6.3
+transformers==4.10.0
+deep-translator==1.8.1
