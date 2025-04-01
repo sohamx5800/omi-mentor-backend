@@ -3,12 +3,11 @@ from fastapi.middleware.cors import CORSMiddleware
 import json
 import ssl
 import http.client as http_client
-from transformers import pipeline
+from transformers import pipeline  
 from deep_translator import GoogleTranslator
 from sqlalchemy.orm import Session
 from database import SessionLocal, init_db, Task
 from config import API_KEY
-import logging
 
 # Initialize Database
 init_db()
@@ -23,15 +22,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Groq API setup
 URL = "api.groq.com"
 ENDPOINT = "/openai/v1/chat/completions"
-
-# Set up logging
-logging.basicConfig(level=logging.DEBUG)
-
-# Load T5 Pipeline for Summarization & Refinement
-t5_pipeline = pipeline("summarization", model="t5-small")
 
 def ask_groq(question):
     """Fetch response from Groq API."""
@@ -40,7 +32,7 @@ def ask_groq(question):
     payload = {
         "model": "llama-3.3-70b-versatile",
         "messages": [
-            {"role": "system", "content": "Act as a mentor. Provide clear answers and suggestions."},
+            {"role": "system", "content": "Always provide a direct answer or suggestion."},
             {"role": "user", "content": question}
         ]
     }
@@ -57,16 +49,14 @@ def ask_groq(question):
     else:
         return f"❌ Error {res.status}: {data.decode('utf-8')}"
 
-def refine_text_with_t5(text, max_length=50):
-    """Uses T5 to summarize and refine responses."""
-    if len(text) <= max_length:
-        return text  # If short, return as is
-    
-    try:
-        summary = t5_pipeline(text, max_length=max_length, min_length=20, do_sample=False)
-        return summary[0]["summary_text"]
-    except Exception:
-        return text  # Fallback to original text
+def summarize_text(text, max_lines=3, max_length=150):
+    """Summarizes the text into a maximum number of lines."""
+    if len(text) > max_length:
+        # Shorten the response to fit into max_lines
+        lines = text.split(".")
+        summarized = ". ".join(lines[:max_lines]) + "."
+        return summarized
+    return text
 
 def translate_to_english(text):
     """Translates text to English if necessary."""
@@ -77,7 +67,7 @@ def translate_to_english(text):
 
 @app.post("/livetranscript")
 async def live_transcription(request: Request):
-    """Processes transcription, translates if needed, and sends refined response."""
+    """Processes transcription, translates if needed, and sends response."""
     try:
         data = await request.json()
         segments = data.get("segments", [])
@@ -90,15 +80,10 @@ async def live_transcription(request: Request):
         
         translated_text = translate_to_english(transcript)
         ai_response = ask_groq(translated_text)
-        refined_response = refine_text_with_t5(ai_response)
-
-        return {
-            "message": refined_response,
-            "response": ai_response,
-            "suggestion": "✅ Check full response in the app." if len(ai_response) > 50 else ai_response
-        }
-    except Exception as e:
-        logging.error(f"Error in live_transcription: {e}")
+        notification_message = summarize_text(ai_response)
+        
+        return {"message": notification_message, "response": ai_response}
+    except Exception:
         return {"message": "Internal Server Error"}
 
 @app.post("/webhook")
@@ -112,53 +97,32 @@ async def receive_transcription(request: Request):
 
         translated_text = translate_to_english(transcript)
         ai_response = ask_groq(translated_text)
-        refined_response = refine_text_with_t5(ai_response)
 
-        return {
-            "message": "Webhook received",
-            "response": ai_response,
-            "suggestion": "✅ View full response in the app." if len(ai_response) > 50 else ai_response
-        }
-    except Exception as e:
-        logging.error(f"Error in webhook: {e}")
+        notification_message = summarize_text(ai_response)
+        return {"message": "Webhook received", "response": ai_response, "notification": notification_message}
+    except Exception:
         return {"message": "Internal Server Error"}
 
 # Task Management API
 @app.get("/tasks")
 def get_tasks(db: Session = Depends(SessionLocal)):
-    """Retrieve all tasks from the database."""
-    try:
-        tasks = db.query(Task).all()
-        return {"tasks": tasks}
-    except Exception as e:
-        logging.error(f"Error in get_tasks: {e}")
-        return {"message": "Error retrieving tasks"}
+    return {"tasks": db.query(Task).all()}
 
 @app.post("/tasks")
 def add_task(task_text: str, db: Session = Depends(SessionLocal)):
-    """Add a new task to the database."""
-    try:
-        new_task = Task(task=task_text)
-        db.add(new_task)
-        db.commit()
-        return {"message": "Task added successfully!"}
-    except Exception as e:
-        logging.error(f"Error in add_task: {e}")
-        return {"message": "Error adding task"}
+    new_task = Task(task=task_text)
+    db.add(new_task)
+    db.commit()
+    return {"message": "Task added successfully!"}
 
 @app.delete("/tasks/{task_id}")
 def delete_task(task_id: int, db: Session = Depends(SessionLocal)):
-    """Delete a task from the database by task_id."""
-    try:
-        task = db.query(Task).filter(Task.id == task_id).first()
-        if task:
-            db.delete(task)
-            db.commit()
-            return {"message": "Task deleted successfully!"}
-        return {"error": "Task not found"}
-    except Exception as e:
-        logging.error(f"Error in delete_task: {e}")
-        return {"message": "Error deleting task"}
+    task = db.query(Task).filter(Task.id == task_id).first()
+    if task:
+        db.delete(task)
+        db.commit()
+        return {"message": "Task deleted successfully!"}
+    return {"error": "Task not found"}
 
 if __name__ == "__main__":
     import uvicorn
