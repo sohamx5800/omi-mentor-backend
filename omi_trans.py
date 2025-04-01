@@ -3,11 +3,12 @@ from fastapi.middleware.cors import CORSMiddleware
 import json
 import ssl
 import http.client as http_client
-from transformers import pipeline  
+from transformers import pipeline
 from deep_translator import GoogleTranslator
 from sqlalchemy.orm import Session
 from database import SessionLocal, init_db, Task
 from config import API_KEY
+import logging
 
 # Initialize Database
 init_db()
@@ -22,8 +23,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Groq API setup
 URL = "api.groq.com"
 ENDPOINT = "/openai/v1/chat/completions"
+
+# Set up logging
+logging.basicConfig(level=logging.DEBUG)
 
 # Load T5 Pipeline for Summarization & Refinement
 t5_pipeline = pipeline("summarization", model="t5-small")
@@ -46,10 +51,9 @@ def ask_groq(question):
     conn.request("POST", ENDPOINT, body=json.dumps(payload), headers=headers)
     res = conn.getresponse()
     data = res.read()
-
+    
     if res.status == 200:
-        response_content = json.loads(data.decode("utf-8"))["choices"][0]["message"]["content"]
-        return response_content.strip()
+        return json.loads(data.decode("utf-8"))["choices"][0]["message"]["content"]
     else:
         return f"❌ Error {res.status}: {data.decode('utf-8')}"
 
@@ -93,7 +97,8 @@ async def live_transcription(request: Request):
             "response": ai_response,
             "suggestion": "✅ Check full response in the app." if len(ai_response) > 50 else ai_response
         }
-    except Exception:
+    except Exception as e:
+        logging.error(f"Error in live_transcription: {e}")
         return {"message": "Internal Server Error"}
 
 @app.post("/webhook")
@@ -114,29 +119,46 @@ async def receive_transcription(request: Request):
             "response": ai_response,
             "suggestion": "✅ View full response in the app." if len(ai_response) > 50 else ai_response
         }
-    except Exception:
+    except Exception as e:
+        logging.error(f"Error in webhook: {e}")
         return {"message": "Internal Server Error"}
 
 # Task Management API
 @app.get("/tasks")
 def get_tasks(db: Session = Depends(SessionLocal)):
-    return {"tasks": db.query(Task).all()}
+    """Retrieve all tasks from the database."""
+    try:
+        tasks = db.query(Task).all()
+        return {"tasks": tasks}
+    except Exception as e:
+        logging.error(f"Error in get_tasks: {e}")
+        return {"message": "Error retrieving tasks"}
 
 @app.post("/tasks")
 def add_task(task_text: str, db: Session = Depends(SessionLocal)):
-    new_task = Task(task=task_text)
-    db.add(new_task)
-    db.commit()
-    return {"message": "Task added successfully!"}
+    """Add a new task to the database."""
+    try:
+        new_task = Task(task=task_text)
+        db.add(new_task)
+        db.commit()
+        return {"message": "Task added successfully!"}
+    except Exception as e:
+        logging.error(f"Error in add_task: {e}")
+        return {"message": "Error adding task"}
 
 @app.delete("/tasks/{task_id}")
 def delete_task(task_id: int, db: Session = Depends(SessionLocal)):
-    task = db.query(Task).filter(Task.id == task_id).first()
-    if task:
-        db.delete(task)
-        db.commit()
-        return {"message": "Task deleted successfully!"}
-    return {"error": "Task not found"}
+    """Delete a task from the database by task_id."""
+    try:
+        task = db.query(Task).filter(Task.id == task_id).first()
+        if task:
+            db.delete(task)
+            db.commit()
+            return {"message": "Task deleted successfully!"}
+        return {"error": "Task not found"}
+    except Exception as e:
+        logging.error(f"Error in delete_task: {e}")
+        return {"message": "Error deleting task"}
 
 if __name__ == "__main__":
     import uvicorn
