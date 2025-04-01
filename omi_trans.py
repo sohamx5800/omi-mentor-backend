@@ -8,19 +8,6 @@ from deep_translator import GoogleTranslator
 from sqlalchemy.orm import Session
 from database import SessionLocal, init_db, Task
 from config import API_KEY
-import asyncio
-import logging
-summarizer = pipeline("summarization", model="t5-small")
-# Set up logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-# Initialize Summarization Model (Lightweight t5-small)
-try:
-    summarizer = pipeline("summarization", model="t5-small")
-except Exception as e:
-    logger.error(f"Failed to load t5-small: {str(e)}")
-    summarizer = None
 
 # Initialize Database
 init_db()
@@ -38,60 +25,55 @@ app.add_middleware(
 URL = "api.groq.com"
 ENDPOINT = "/openai/v1/chat/completions"
 
-def ask_groq(question):
-    """Fetch response from Groq API with answer and suggestion."""
-    try:
-        context = ssl.SSLContext(ssl.PROTOCOL_TLSv1_2)
-        conn = http_client.HTTPSConnection(URL, context=context)
-        payload = {
-            "model": "llama-3.3-70b-versatile",
-            "messages": [
-                {"role": "system", "content": "Act as a mentor. Provide a complete, concise answer (1-2 sentences) followed by a suggestion (one word or up to three lines). Separate answer and suggestion with '||'."},
-                {"role": "user", "content": question}
-            ]
-        }
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {API_KEY}"
-        }
-        conn.request("POST", ENDPOINT, body=json.dumps(payload), headers=headers)
-        res = conn.getresponse()
-        data = res.read()
-        
-        if res.status == 200:
-            full_response = json.loads(data.decode("utf-8"))["choices"][0]["message"]["content"]
-            try:
-                answer, suggestion = full_response.split("||", 1)
-                return answer.strip(), suggestion.strip()
-            except ValueError:
-                return full_response.strip(), "Reflect"
-        else:
-            logger.error(f"Groq API error {res.status}: {data.decode('utf-8')}")
-            return "Error fetching response", "Retry"
-    except Exception as e:
-        logger.error(f"Groq API call failed: {str(e)}")
-        return "API error", "Retry"
+# Load T5 Pipeline for Summarization & Refinement
+t5_pipeline = pipeline("summarization", model="t5-small")
 
-def summarize_text(text, target_length=50):
-    if len(text) <= target_length:
-        return text
+def ask_groq(question):
+    """Fetch response from Groq API."""
+    context = ssl.SSLContext(ssl.PROTOCOL_TLSv1_2)
+    conn = http_client.HTTPSConnection(URL, context=context)
+    payload = {
+        "model": "llama-3.3-70b-versatile",
+        "messages": [
+            {"role": "system", "content": "Act as a mentor. Provide clear answers and suggestions."},
+            {"role": "user", "content": question}
+        ]
+    }
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {API_KEY}"
+    }
+    conn.request("POST", ENDPOINT, body=json.dumps(payload), headers=headers)
+    res = conn.getresponse()
+    data = res.read()
+
+    if res.status == 200:
+        response_content = json.loads(data.decode("utf-8"))["choices"][0]["message"]["content"]
+        return response_content.strip()
+    else:
+        return f"❌ Error {res.status}: {data.decode('utf-8')}"
+
+def refine_text_with_t5(text, max_length=50):
+    """Uses T5 to summarize and refine responses."""
+    if len(text) <= max_length:
+        return text  # If short, return as is
+    
     try:
-        summary = summarizer(text, max_length=12, min_length=5, do_sample=False)[0]["summary_text"]
-        return summary[:target_length-3].rsplit(" ", 1)[0] + "..." if len(summary) > target_length else summary
+        summary = t5_pipeline(text, max_length=max_length, min_length=20, do_sample=False)
+        return summary[0]["summary_text"]
     except Exception:
-        return text[:target_length-3].rsplit(" ", 1)[0] + "..."
+        return text  # Fallback to original text
 
 def translate_to_english(text):
-    """Automatically detects and translates text to English if necessary."""
+    """Translates text to English if necessary."""
     try:
         return GoogleTranslator(source='auto', target='en').translate(text)
-    except Exception as e:
-        logger.error(f"Translation failed: {str(e)}")
-        return text
+    except Exception:
+        return text  # Fallback to original text
 
 @app.post("/livetranscript")
 async def live_transcription(request: Request):
-    """Processes transcription, provides answer and suggestion with timeout."""
+    """Processes transcription, translates if needed, and sends refined response."""
     try:
         data = await request.json()
         segments = data.get("segments", [])
@@ -103,32 +85,16 @@ async def live_transcription(request: Request):
             return {"message": "No valid transcription received"}
         
         translated_text = translate_to_english(transcript)
-        answer, suggestion = ask_groq(translated_text)
-        
-        # Summarize with timeout
-        async def summarize_with_timeout(text, length):
-            try:
-                return await asyncio.wait_for(asyncio.to_thread(summarize_text, text, length), timeout=1.5)
-            except asyncio.TimeoutError:
-                logger.warning(f"Summarization timed out for: {text}")
-                return text[:length-3].rsplit(" ", 1)[0] + "..."
-
-        short_answer = await summarize_with_timeout(answer, 30)
-        short_suggestion = await summarize_with_timeout(suggestion, 15)
-        notification = f"{short_answer} | {short_suggestion}"[:50]
+        ai_response = ask_groq(translated_text)
+        refined_response = refine_text_with_t5(ai_response)
 
         return {
-            "message": notification,
-            "response": answer,
-            "suggestion": suggestion
+            "message": refined_response,
+            "response": ai_response,
+            "suggestion": "✅ Check full response in the app." if len(ai_response) > 50 else ai_response
         }
-    except Exception as e:
-        logger.error(f"Live transcription error: {str(e)}")
-        return {
-            "message": "Processing failed",
-            "response": "Error occurred",
-            "suggestion": "Try again"
-        }
+    except Exception:
+        return {"message": "Internal Server Error"}
 
 @app.post("/webhook")
 async def receive_transcription(request: Request):
@@ -140,17 +106,18 @@ async def receive_transcription(request: Request):
             return {"message": "No transcription received"}
 
         translated_text = translate_to_english(transcript)
-        answer, suggestion = ask_groq(translated_text)
+        ai_response = ask_groq(translated_text)
+        refined_response = refine_text_with_t5(ai_response)
+
         return {
             "message": "Webhook received",
-            "response": answer,
-            "suggestion": suggestion
+            "response": ai_response,
+            "suggestion": "✅ View full response in the app." if len(ai_response) > 50 else ai_response
         }
     except Exception:
-        logger.error(f"Webhook error: {str(e)}")
         return {"message": "Internal Server Error"}
 
-# Task Management Routes
+# Task Management API
 @app.get("/tasks")
 def get_tasks(db: Session = Depends(SessionLocal)):
     return {"tasks": db.query(Task).all()}
