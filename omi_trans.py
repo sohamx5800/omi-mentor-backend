@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from database import SessionLocal, init_db, Task
 from config import API_KEY
 
-# Initialize Summarization Model (Smaller model to save memory)
+# Initialize Summarization Model (Lightweight t5-small)
 summarizer = pipeline("summarization", model="t5-small")
 
 # Initialize Database
@@ -29,13 +29,13 @@ URL = "api.groq.com"
 ENDPOINT = "/openai/v1/chat/completions"
 
 def ask_groq(question):
-    """Fetch response from Groq API with direct answers/suggestions."""
+    """Fetch response from Groq API with answer and suggestion."""
     context = ssl.SSLContext(ssl.PROTOCOL_TLSv1_2)
     conn = http_client.HTTPSConnection(URL, context=context)
     payload = {
         "model": "llama-3.3-70b-versatile",
         "messages": [
-            {"role": "system", "content": "Always provide a direct answer and meaningful suggestions."},
+            {"role": "system", "content": "Act as a mentor. Provide a complete, concise answer (1-2 sentences) followed by a suggestion (one word or up to three lines). Separate answer and suggestion with '||'."},
             {"role": "user", "content": question}
         ]
     }
@@ -49,29 +49,41 @@ def ask_groq(question):
     
     if res.status == 200:
         full_response = json.loads(data.decode("utf-8"))["choices"][0]["message"]["content"]
-        if len(full_response) <= 50:
-            return full_response  # Directly return if already short
-        return summarize_text(full_response, max_length=50)  # Summarize otherwise
+        try:
+            answer, suggestion = full_response.split("||", 1)
+            return answer.strip(), suggestion.strip()
+        except ValueError:
+            return full_response.strip(), "Reflect"
     else:
-        return f"❌ Error {res.status}: {data.decode('utf-8')}"
+        return f"Error {res.status}", "Retry"
 
-def summarize_text(text, max_length=50):
-    """Summarizes response into max 3 lines, keeping the core answer/suggestion."""
-    if len(text) <= max_length:
-        return text  
-    summary = summarizer(text, max_length=max_length, min_length=10, do_sample=False)[0]["summary_text"]
-    return summary
+def summarize_text(text, target_length=50):
+    """Summarizes text to target_length characters with t5-small, ensuring coherence."""
+    if len(text) <= target_length:
+        return text
+    try:
+        # Use low max_length for concise output, adjust min_length for flexibility
+        summary = summarizer(text, max_length=12, min_length=5, do_sample=False)[0]["summary_text"]
+        # Truncate at last space to avoid mid-word cuts, add ellipsis
+        if len(summary) > target_length:
+            truncated = summary[:target_length-3].rsplit(" ", 1)[0] + "..."
+            return truncated if len(truncated) <= target_length else summary[:target_length-3] + "..."
+        return summary
+    except Exception:
+        # Fallback: truncate at last space with ellipsis
+        truncated = text[:target_length-3].rsplit(" ", 1)[0] + "..."
+        return truncated if len(truncated) <= target_length else text[:target_length-3] + "..."
 
 def translate_to_english(text):
     """Automatically detects and translates text to English if necessary."""
     try:
         return GoogleTranslator(source='auto', target='en').translate(text)
     except Exception:
-        return text  # Return original text if translation fails
+        return text
 
 @app.post("/livetranscript")
 async def live_transcription(request: Request):
-    """Processes transcription, translates if necessary, and provides summarized response."""
+    """Processes transcription, provides answer and suggestion."""
     try:
         data = await request.json()
         segments = data.get("segments", [])
@@ -83,12 +95,17 @@ async def live_transcription(request: Request):
             return {"message": "No valid transcription received"}
         
         translated_text = translate_to_english(transcript)
-        ai_response = ask_groq(translated_text)
-        notification_message = summarize_text(ai_response, max_length=50)
+        answer, suggestion = ask_groq(translated_text)
+        
+        # Summarize answer and suggestion for notification (max 50 chars)
+        short_answer = summarize_text(answer, 30)  # Room for suggestion
+        short_suggestion = summarize_text(suggestion, 15)
+        notification = f"{short_answer} | {short_suggestion}"[:50]
 
         return {
-            "message": notification_message,  
-            "response": ai_response
+            "message": notification,  # Max 50 chars
+            "response": answer,       # Full answer
+            "suggestion": suggestion  # Full suggestion (1 word or up to 3 lines)
         }
     except Exception:
         return {"message": "Internal Server Error"}
@@ -103,8 +120,12 @@ async def receive_transcription(request: Request):
             return {"message": "No transcription received"}
 
         translated_text = translate_to_english(transcript)
-        ai_response = ask_groq(translated_text)
-        return {"message": "Webhook received", "response": ai_response}
+        answer, suggestion = ask_groq(translated_text)
+        return {
+            "message": "Webhook received",
+            "response": answer,
+            "suggestion": suggestion
+        }
     except Exception:
         return {"message": "Internal Server Error"}
 
