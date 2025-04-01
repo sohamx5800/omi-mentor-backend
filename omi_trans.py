@@ -55,24 +55,23 @@ def ask_groq(question):
         return f"❌ Error {res.status}: {data.decode('utf-8')}"
 
 def summarize_text(text):
-    """Summarizes response while avoiding input length issues."""
-    if len(text) <= 50:  # If text is already short, return as is
-        return text  
+    """Dynamically adjust max_length based on input length."""
+    input_length = len(text.split())  # Word count
+    if input_length < 20:
+        return text  # Skip summarization for very short text
+    max_length = max(20, input_length // 2)  # Adaptive max_length
     try:
-        adjusted_max_length = max(len(text) // 2, 30)  # Ensure summarization doesn't fail
-        summary = summarizer(text, max_length=adjusted_max_length, min_length=20, do_sample=False)[0]["summary_text"]
+        summary = summarizer(text, max_length=max_length, min_length=10, do_sample=False)[0]["summary_text"]
         return summary
-    except Exception as e:
-        print(f"Summarization failed: {e}")
-        return text  # Fallback to original text
+    except Exception:
+        return text  # Fallback to original text if summarization fails
 
 def translate_to_english(text):
     """Automatically detects and translates text to English if necessary."""
     try:
         return GoogleTranslator(source='auto', target='en').translate(text)
-    except Exception as e:
-        print(f"Translation failed: {e}")
-        return text  # Return original if translation fails
+    except Exception:
+        return text  # Return original text if translation fails
 
 @app.post("/livetranscript")
 async def live_transcription(request: Request):
@@ -88,17 +87,15 @@ async def live_transcription(request: Request):
             return {"message": "No valid transcription received"}
         
         translated_text = translate_to_english(transcript)
-        mood, suggestion = "Neutral 😐", "Stay focused and keep moving!"
         ai_response = ask_groq(translated_text)
         notification_message = summarize_text(ai_response)
 
         return {
             "message": notification_message,  
-            "sentiment": mood,
+            "sentiment": "Neutral 😐",  
             "response": ai_response
         }
     except Exception as e:
-        print(f"Error in /livetranscript: {e}")
         return {"message": "Internal Server Error"}
 
 @app.post("/webhook")
@@ -111,19 +108,16 @@ async def receive_transcription(request: Request):
             return {"message": "No transcription received"}
 
         translated_text = translate_to_english(transcript)
-        mood, suggestion = "Neutral 😐", "Stay focused and keep moving!"
         ai_response = ask_groq(translated_text)
 
-        return {"message": "Webhook received", "sentiment": mood, "response": ai_response}
+        return {"message": "Webhook received", "sentiment": "Neutral 😐", "response": ai_response}
     except Exception as e:
-        print(f"Error in /webhook: {e}")
         return {"message": "Internal Server Error"}
 
 # Task Management Routes
 @app.get("/tasks")
 def get_tasks(db: Session = Depends(SessionLocal)):
-    tasks = db.query(Task).all()
-    return {"tasks": tasks}
+    return {"tasks": db.query(Task).all()}
 
 @app.post("/tasks")
 def add_task(task_text: str, db: Session = Depends(SessionLocal)):
