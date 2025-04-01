@@ -10,7 +10,7 @@ from database import SessionLocal, init_db, Task
 from config import API_KEY
 import asyncio
 import logging
-
+summarizer = pipeline("summarization", model="t5-small")
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -73,20 +73,13 @@ def ask_groq(question):
         return "API error", "Retry"
 
 def summarize_text(text, target_length=50):
-    """Summarizes text quickly to target_length characters with t5-small."""
     if len(text) <= target_length:
         return text
-    truncated = text[:target_length-3].rsplit(" ", 1)[0] + "..."
-    if summarizer is None:
-        return truncated
     try:
         summary = summarizer(text, max_length=12, min_length=5, do_sample=False)[0]["summary_text"]
-        if len(summary) > target_length:
-            return summary[:target_length-3].rsplit(" ", 1)[0] + "..."
-        return summary
-    except Exception as e:
-        logger.error(f"Summarization failed: {str(e)}")
-        return truncated
+        return summary[:target_length-3].rsplit(" ", 1)[0] + "..." if len(summary) > target_length else summary
+    except Exception:
+        return text[:target_length-3].rsplit(" ", 1)[0] + "..."
 
 def translate_to_english(text):
     """Automatically detects and translates text to English if necessary."""
