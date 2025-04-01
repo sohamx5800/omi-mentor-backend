@@ -8,6 +8,7 @@ from deep_translator import GoogleTranslator
 from sqlalchemy.orm import Session
 from database import SessionLocal, init_db, Task
 from config import API_KEY
+import asyncio
 
 # Initialize Summarization Model (Lightweight t5-small)
 summarizer = pipeline("summarization", model="t5-small")
@@ -55,23 +56,21 @@ def ask_groq(question):
         except ValueError:
             return full_response.strip(), "Reflect"
     else:
-        return f"Error {res.status}", "Retry"
+        return "Error fetching response", "Retry"
 
 def summarize_text(text, target_length=50):
-    """Summarizes text to target_length characters with t5-small, ensuring coherence."""
+    """Summarizes text quickly to target_length characters with t5-small."""
     if len(text) <= target_length:
         return text
+    # Fallback to simple truncation for speed if summarization is slow
+    truncated = text[:target_length-3].rsplit(" ", 1)[0] + "..."
     try:
-        # Use low max_length for concise output, adjust min_length for flexibility
+        # Use very low max_length for fast, concise output
         summary = summarizer(text, max_length=12, min_length=5, do_sample=False)[0]["summary_text"]
-        # Truncate at last space to avoid mid-word cuts, add ellipsis
         if len(summary) > target_length:
-            truncated = summary[:target_length-3].rsplit(" ", 1)[0] + "..."
-            return truncated if len(truncated) <= target_length else summary[:target_length-3] + "..."
+            return summary[:target_length-3].rsplit(" ", 1)[0] + "..."
         return summary
     except Exception:
-        # Fallback: truncate at last space with ellipsis
-        truncated = text[:target_length-3].rsplit(" ", 1)[0] + "..."
         return truncated if len(truncated) <= target_length else text[:target_length-3] + "..."
 
 def translate_to_english(text):
@@ -83,7 +82,7 @@ def translate_to_english(text):
 
 @app.post("/livetranscript")
 async def live_transcription(request: Request):
-    """Processes transcription, provides answer and suggestion."""
+    """Processes transcription, provides answer and suggestion with timeout."""
     try:
         data = await request.json()
         segments = data.get("segments", [])
@@ -97,18 +96,24 @@ async def live_transcription(request: Request):
         translated_text = translate_to_english(transcript)
         answer, suggestion = ask_groq(translated_text)
         
-        # Summarize answer and suggestion for notification (max 50 chars)
-        short_answer = summarize_text(answer, 30)  # Room for suggestion
-        short_suggestion = summarize_text(suggestion, 15)
+        # Summarize with a timeout to prevent 499
+        async def summarize_with_timeout(text, length):
+            try:
+                return await asyncio.wait_for(asyncio.to_thread(summarize_text, text, length), timeout=2.0)
+            except asyncio.TimeoutError:
+                return text[:length-3].rsplit(" ", 1)[0] + "..."
+
+        short_answer = await summarize_with_timeout(answer, 30)
+        short_suggestion = await summarize_with_timeout(suggestion, 15)
         notification = f"{short_answer} | {short_suggestion}"[:50]
 
         return {
             "message": notification,  # Max 50 chars
             "response": answer,       # Full answer
-            "suggestion": suggestion  # Full suggestion (1 word or up to 3 lines)
+            "suggestion": suggestion  # Full suggestion
         }
-    except Exception:
-        return {"message": "Internal Server Error"}
+    except Exception as e:
+        return {"message": "Server error", "error": str(e)}
 
 @app.post("/webhook")
 async def receive_transcription(request: Request):
