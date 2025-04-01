@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from database import SessionLocal, init_db, Task
 from config import API_KEY
 
-# Initialize Summarization Model (Use a smaller model to save memory)
+# Initialize Summarization Model
 summarizer = pipeline("summarization", model="t5-small")
 
 # Initialize Database
@@ -49,42 +49,30 @@ def ask_groq(question):
     
     if res.status == 200:
         full_response = json.loads(data.decode("utf-8"))["choices"][0]["message"]["content"]
-        concise_response = summarize_text(full_response, max_length=200)  
+        concise_response = summarize_text(full_response)  
         return concise_response
     else:
         return f"❌ Error {res.status}: {data.decode('utf-8')}"
 
-def summarize_text(text, max_length=100):
-    """Summarizes response into 2-3 lines, keeping the core topic/suggestion."""
-    # Adjust max_length dynamically based on input length
-    input_length = len(text.split())
-    if input_length <= 50:
-        max_length = min(max_length, 40)  # Reduce max_length for shorter inputs
-    elif input_length <= 100:
-        max_length = min(max_length, 100)  # Adjust for moderate-length inputs
-    
-    if len(text) <= max_length:
-        return text  # Return as is if input text is short enough
-    
-    # Handle the case where the max_length is smaller than the min_length
+def summarize_text(text):
+    """Summarizes response while avoiding input length issues."""
+    if len(text) <= 50:  # If text is already short, return as is
+        return text  
     try:
-        summary = summarizer(text, max_length=max_length, min_length=min(50, max_length), do_sample=False)[0]["summary_text"]
+        adjusted_max_length = max(len(text) // 2, 30)  # Ensure summarization doesn't fail
+        summary = summarizer(text, max_length=adjusted_max_length, min_length=20, do_sample=False)[0]["summary_text"]
         return summary
     except Exception as e:
-        return f"Error during summarization: {str(e)}"
+        print(f"Summarization failed: {e}")
+        return text  # Fallback to original text
 
 def translate_to_english(text):
     """Automatically detects and translates text to English if necessary."""
     try:
-        translated_text = GoogleTranslator(source='auto', target='en').translate(text)
-        return translated_text
-    except Exception:
-        return text  # Return original text if translation fails
-
-@app.get("/")
-async def root():
-    """Root endpoint to verify server is running"""
-    return {"message": "Welcome to the To-Do List API"}
+        return GoogleTranslator(source='auto', target='en').translate(text)
+    except Exception as e:
+        print(f"Translation failed: {e}")
+        return text  # Return original if translation fails
 
 @app.post("/livetranscript")
 async def live_transcription(request: Request):
@@ -100,18 +88,17 @@ async def live_transcription(request: Request):
             return {"message": "No valid transcription received"}
         
         translated_text = translate_to_english(transcript)
-        # Removed Sentiment Analysis: Default to neutral sentiment
         mood, suggestion = "Neutral 😐", "Stay focused and keep moving!"
-
         ai_response = ask_groq(translated_text)
-        notification_message = summarize_text(ai_response, max_length=200)
+        notification_message = summarize_text(ai_response)
 
         return {
             "message": notification_message,  
-            "sentiment": mood,  # Now returns neutral by default
+            "sentiment": mood,
             "response": ai_response
         }
     except Exception as e:
+        print(f"Error in /livetranscript: {e}")
         return {"message": "Internal Server Error"}
 
 @app.post("/webhook")
@@ -124,12 +111,12 @@ async def receive_transcription(request: Request):
             return {"message": "No transcription received"}
 
         translated_text = translate_to_english(transcript)
-        # Removed Sentiment Analysis: Default to neutral sentiment
         mood, suggestion = "Neutral 😐", "Stay focused and keep moving!"
         ai_response = ask_groq(translated_text)
 
         return {"message": "Webhook received", "sentiment": mood, "response": ai_response}
     except Exception as e:
+        print(f"Error in /webhook: {e}")
         return {"message": "Internal Server Error"}
 
 # Task Management Routes
