@@ -9,6 +9,9 @@ from sqlalchemy.orm import Session
 from database import SessionLocal, init_db, Task
 from config import API_KEY
 
+# Initialize Summarization Model (Smaller model to save memory)
+summarizer = pipeline("summarization", model="t5-small")
+
 # Initialize Database
 init_db()
 
@@ -26,13 +29,13 @@ URL = "api.groq.com"
 ENDPOINT = "/openai/v1/chat/completions"
 
 def ask_groq(question):
-    """Fetch response from Groq API."""
+    """Fetch response from Groq API with direct answers/suggestions."""
     context = ssl.SSLContext(ssl.PROTOCOL_TLSv1_2)
     conn = http_client.HTTPSConnection(URL, context=context)
     payload = {
         "model": "llama-3.3-70b-versatile",
         "messages": [
-            {"role": "system", "content": "Always provide a direct answer or suggestion."},
+            {"role": "system", "content": "Always provide a direct answer and meaningful suggestions."},
             {"role": "user", "content": question}
         ]
     }
@@ -45,24 +48,30 @@ def ask_groq(question):
     data = res.read()
     
     if res.status == 200:
-        return json.loads(data.decode("utf-8"))["choices"][0]["message"]["content"]
+        full_response = json.loads(data.decode("utf-8"))["choices"][0]["message"]["content"]
+        if len(full_response) <= 50:
+            return full_response  # Directly return if already short
+        return summarize_text(full_response, max_length=50)  # Summarize otherwise
     else:
         return f"❌ Error {res.status}: {data.decode('utf-8')}"
 
 def summarize_text(text, max_length=50):
-    """Summarizes response to max 50 characters if needed."""
-    return text[:max_length] if len(text) > max_length else text
+    """Summarizes response into max 3 lines, keeping the core answer/suggestion."""
+    if len(text) <= max_length:
+        return text  
+    summary = summarizer(text, max_length=max_length, min_length=10, do_sample=False)[0]["summary_text"]
+    return summary
 
 def translate_to_english(text):
-    """Translates text to English if necessary."""
+    """Automatically detects and translates text to English if necessary."""
     try:
         return GoogleTranslator(source='auto', target='en').translate(text)
     except Exception:
-        return text  # Fallback to original text
+        return text  # Return original text if translation fails
 
 @app.post("/livetranscript")
 async def live_transcription(request: Request):
-    """Processes transcription, translates if needed, and sends response."""
+    """Processes transcription, translates if necessary, and provides summarized response."""
     try:
         data = await request.json()
         segments = data.get("segments", [])
@@ -75,9 +84,12 @@ async def live_transcription(request: Request):
         
         translated_text = translate_to_english(transcript)
         ai_response = ask_groq(translated_text)
-        notification_message = summarize_text(ai_response)
-        
-        return {"message": notification_message, "response": ai_response}
+        notification_message = summarize_text(ai_response, max_length=50)
+
+        return {
+            "message": notification_message,  
+            "response": ai_response
+        }
     except Exception:
         return {"message": "Internal Server Error"}
 
@@ -92,12 +104,11 @@ async def receive_transcription(request: Request):
 
         translated_text = translate_to_english(transcript)
         ai_response = ask_groq(translated_text)
-
         return {"message": "Webhook received", "response": ai_response}
     except Exception:
         return {"message": "Internal Server Error"}
 
-# Task Management API
+# Task Management Routes
 @app.get("/tasks")
 def get_tasks(db: Session = Depends(SessionLocal)):
     return {"tasks": db.query(Task).all()}
