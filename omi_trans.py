@@ -58,16 +58,23 @@ def summarize_text(text, max_length=100):
     """Summarizes response into 2-3 lines, keeping the core topic/suggestion."""
     # Adjust max_length dynamically based on input length
     input_length = len(text.split())
+    
+    # Reduce max_length for shorter inputs
     if input_length <= 50:
         max_length = min(max_length, 40)  # Reduce max_length for shorter inputs
     elif input_length <= 100:
         max_length = min(max_length, 100)  # Adjust for moderate-length inputs
     
+    # Ensure min_length is never greater than max_length
+    min_length = min(max_length, 50)
+    
     if len(text) <= max_length:
         return text  # Return as is if input text is short enough
     
-    summary = summarizer(text, max_length=max_length, min_length=50, do_sample=False)[0]["summary_text"]
+    # Ensure that min_length <= max_length before passing to summarizer
+    summary = summarizer(text, max_length=max_length, min_length=min_length, do_sample=False)[0]["summary_text"]
     return summary
+
 
 def translate_to_english(text):
     """Automatically detects and translates text to English if necessary."""
